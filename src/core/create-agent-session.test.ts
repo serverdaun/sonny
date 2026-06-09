@@ -7,7 +7,7 @@ import { AgentSession } from "./agent-session";
 import { createAgentSession } from "./create-agent-session";
 
 describe("createAgentSession", () => {
-	test("creates an agent session from config", async () => {
+	async function createTestConfig(): Promise<Config> {
 		const workspace = await mkdtemp(join(tmpdir(), "sonny-session-"));
 		const agentPath = join(workspace, "agents", "sonny");
 
@@ -22,7 +22,7 @@ You are Sonny.
 `,
 		);
 
-		const config: Config = {
+		return {
 			workspace,
 			defaultAgent: "sonny",
 			agentsPath: "agents",
@@ -35,10 +35,28 @@ You are Sonny.
 				maxTokens: 2048,
 			},
 		};
+	}
+
+	test("creates an agent session from config", async () => {
+		const config = await createTestConfig();
 
 		const session = await createAgentSession(config, async () => ({
 			approved: true,
 		}));
+
+		expect(session).toBeInstanceOf(AgentSession);
+	});
+
+	test("accepts a tool event callback", async () => {
+		const config = await createTestConfig();
+
+		const session = await createAgentSession(
+			config,
+			async () => ({
+				approved: true,
+			}),
+			() => {},
+		);
 
 		expect(session).toBeInstanceOf(AgentSession);
 	});

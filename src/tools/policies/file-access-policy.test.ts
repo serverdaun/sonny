@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { checkFileReadAccess } from "./file-access-policy";
+import {
+	checkFileReadAccess,
+	checkFileWriteAccess,
+} from "./file-access-policy";
 
 describe("checkFileReadAccess", () => {
 	test("allows a normal relative path", () => {
@@ -86,6 +89,74 @@ describe("checkFileReadAccess", () => {
 		if (!decision.allowed) {
 			expect(decision.reason).toBe(
 				"Access denied: refusing to read device paths",
+			);
+		}
+	});
+});
+
+describe("checkFileWriteAccess", () => {
+	test("allows a normal relative path", () => {
+		const decision = checkFileWriteAccess("notes/todo.md");
+
+		expect(decision).toEqual({
+			allowed: true,
+			path: resolve(process.cwd(), "notes", "todo.md"),
+		});
+	});
+
+	test("returns the resolved home path", () => {
+		const decision = checkFileWriteAccess("~/sonny-output.txt");
+
+		expect(decision).toEqual({
+			allowed: true,
+			path: resolve(homedir(), "sonny-output.txt"),
+		});
+	});
+
+	test("blocks environment files", () => {
+		const decision = checkFileWriteAccess(".env");
+
+		expect(decision.allowed).toBe(false);
+
+		if (!decision.allowed) {
+			expect(decision.reason).toBe(
+				"Access denied: refusing to write environment files",
+			);
+		}
+	});
+
+	test("blocks SSH credential paths", () => {
+		const decision = checkFileWriteAccess("~/.ssh/config");
+
+		expect(decision.allowed).toBe(false);
+
+		if (!decision.allowed) {
+			expect(decision.reason).toBe(
+				"Access denied: refusing to write credential directories",
+			);
+		}
+	});
+
+	test("blocks sensitive files", () => {
+		const decision = checkFileWriteAccess("~/.npmrc");
+
+		expect(decision.allowed).toBe(false);
+
+		if (!decision.allowed) {
+			expect(decision.reason).toBe(
+				"Access denied: refusing to write sensitive files",
+			);
+		}
+	});
+
+	test("blocks device paths", () => {
+		const decision = checkFileWriteAccess("/dev/zero");
+
+		expect(decision.allowed).toBe(false);
+
+		if (!decision.allowed) {
+			expect(decision.reason).toBe(
+				"Access denied: refusing to write device paths",
 			);
 		}
 	});

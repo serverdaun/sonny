@@ -17,6 +17,26 @@ export type ToolApprover = (
 	request: ToolApprovalRequest,
 ) => Promise<ToolApprovalDecision>;
 
+export type ToolEvent =
+	| {
+			type: "tool.started";
+			toolCallId: string;
+			toolName: string;
+			parameters: unknown;
+			preview: string;
+	  }
+	| {
+			type: "tool.completed";
+			toolCallId: string;
+			toolName: string;
+			parameters: unknown;
+			ok: boolean;
+			content: string;
+			durationMs: number;
+	  };
+
+export type ToolEventHandler = (event: ToolEvent) => void;
+
 const logger = createLogger("tools.tool-executor");
 
 function createDeniedToolMessage(reason?: string): string {
@@ -30,10 +50,32 @@ function createDeniedToolMessage(reason?: string): string {
 	);
 }
 
+function getParameterValue(parameters: unknown, key: string): string | null {
+	if (
+		typeof parameters !== "object" ||
+		parameters === null ||
+		!(key in parameters)
+	) {
+		return null;
+	}
+
+	const value = (parameters as Record<string, unknown>)[key];
+
+	return typeof value === "string" ? value : null;
+}
+
+function createToolPreview(toolName: string, parameters: unknown): string {
+	const parameterKey = toolName === "bash" ? "command" : "path";
+	const value = getParameterValue(parameters, parameterKey);
+
+	return value ?? toolName;
+}
+
 export class ToolExecutor {
 	constructor(
 		private registry: ToolRegistry,
 		private approve: ToolApprover,
+		private onToolEvent?: ToolEventHandler,
 	) {}
 
 	async execute(call: ToolCall): Promise<ToolResult> {
@@ -43,16 +85,28 @@ export class ToolExecutor {
 		try {
 			tool = this.registry.get(call.name);
 		} catch (error) {
+			const result = {
+				ok: false as const,
+				error: error instanceof Error ? error.message : String(error),
+				reason: "not_found" as const,
+			};
+
 			logger.warn("tool.not_found", {
 				toolName: call.name,
 				toolCallId: call.id,
 			});
 
-			return {
+			this.onToolEvent?.({
+				type: "tool.completed",
+				toolCallId: call.id,
+				toolName: call.name,
+				parameters: call.parameters,
 				ok: false,
-				error: error instanceof Error ? error.message : String(error),
-				reason: "not_found",
-			};
+				content: result.error,
+				durationMs: Date.now() - startedAt,
+			});
+
+			return result;
 		}
 
 		logger.info("tool.approval.requested", {
@@ -68,15 +122,26 @@ export class ToolExecutor {
 		});
 
 		if (!decision.approved) {
+			const error = createDeniedToolMessage(decision.reason);
 			logger.info("tool.approval.denied", {
 				toolName: call.name,
 				toolCallId: call.id,
 				reason: decision.reason,
 			});
 
+			this.onToolEvent?.({
+				type: "tool.completed",
+				toolCallId: call.id,
+				toolName: call.name,
+				parameters: call.parameters,
+				ok: false,
+				content: error,
+				durationMs: 0,
+			});
+
 			return {
 				ok: false,
-				error: createDeniedToolMessage(decision.reason),
+				error,
 				reason: "denied",
 			};
 		}
@@ -90,9 +155,19 @@ export class ToolExecutor {
 			toolCallId: call.id,
 		});
 
+		this.onToolEvent?.({
+			type: "tool.started",
+			toolCallId: call.id,
+			toolName: call.name,
+			parameters: call.parameters,
+			preview: createToolPreview(call.name, call.parameters),
+		});
+
+		const executionStartedAt = Date.now();
+
 		try {
 			const result = await tool.execute(call.parameters);
-			const durationMs = Date.now() - startedAt;
+			const durationMs = Date.now() - executionStartedAt;
 
 			if (result.ok) {
 				logger.info("tool.completed", {
@@ -110,22 +185,45 @@ export class ToolExecutor {
 				});
 			}
 
-			return result;
-		} catch (error) {
-			logger.error("tool.failed", {
-				toolName: call.name,
+			this.onToolEvent?.({
+				type: "tool.completed",
 				toolCallId: call.id,
-				durationMs: Date.now() - startedAt,
-				error: error instanceof Error ? error.message : String(error),
+				toolName: call.name,
+				parameters: call.parameters,
+				ok: result.ok,
+				content: result.ok ? result.content : result.error,
+				durationMs,
 			});
 
-			return {
-				ok: false,
+			return result;
+		} catch (error) {
+			const durationMs = Date.now() - executionStartedAt;
+			const result = {
+				ok: false as const,
 				error: `Tool execution failed: ${
 					error instanceof Error ? error.message : String(error)
 				}`,
-				reason: "execution_failed",
+				reason: "execution_failed" as const,
 			};
+
+			logger.error("tool.failed", {
+				toolName: call.name,
+				toolCallId: call.id,
+				durationMs,
+				error: error instanceof Error ? error.message : String(error),
+			});
+
+			this.onToolEvent?.({
+				type: "tool.completed",
+				toolCallId: call.id,
+				toolName: call.name,
+				parameters: call.parameters,
+				ok: false,
+				content: result.error,
+				durationMs,
+			});
+
+			return result;
 		}
 	}
 }

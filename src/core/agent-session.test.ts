@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { AgentDefinition } from "../agents/schemas/agent.schema";
+import { writeFileTool } from "../tools/builtin/write-file-tool";
 import type { Tool } from "../tools/tool";
 import { ToolExecutor } from "../tools/tool-executor";
 import { ToolRegistry } from "../tools/tool-registry";
@@ -173,6 +174,50 @@ describe("AgentSession", () => {
 			toolCallId: "call_missing",
 			content: "Tool not found: missing_tool",
 		});
+	});
+
+	test("feeds denied built-in tool approvals back to the LLM", async () => {
+		const tools = new ToolRegistry();
+		tools.register(writeFileTool);
+
+		const toolExecutor = new ToolExecutor(tools, async () => ({
+			approved: false,
+			reason: "User declined writeFile.",
+		}));
+		const llm = new FakeLLM([
+			{
+				content: "",
+				stopReason: "tool_calls",
+				toolCalls: [
+					{
+						id: "call_write",
+						name: "writeFile",
+						parameters: {
+							path: "notes.txt",
+							content: "hello",
+						},
+					},
+				],
+			},
+			{
+				content: "I will not write that file.",
+				stopReason: "stop",
+				toolCalls: [],
+			},
+		]);
+		const session = new AgentSession(state, llm, tools, toolExecutor);
+
+		await session.chat("Write a file");
+
+		const toolMessage = llm.calls[1]?.at(-1);
+
+		expect(toolMessage).toMatchObject({
+			role: "tool",
+			toolCallId: "call_write",
+		});
+		expect(toolMessage?.content).toContain("BLOCKED");
+		expect(toolMessage?.content).toContain("Do NOT retry");
+		expect(toolMessage?.content).toContain("User declined writeFile.");
 	});
 
 	test("does not store empty tool calls on final assistant messages", async () => {

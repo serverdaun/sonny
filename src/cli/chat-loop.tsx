@@ -1,23 +1,28 @@
 import { Box, render, Text, useApp, useInput } from "ink";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentSession } from "../core/agent-session";
 import type {
 	ToolApprovalDecision,
 	ToolApprovalRequest,
 	ToolApprover,
+	ToolEventHandler,
 } from "../tools/tool-executor";
 import { createLogger } from "../utils/logger";
+import { formatCompletedToolMessage } from "./tool-display";
 
 const logger = createLogger("cli.chat-loop");
 
 type UiMessage = {
 	id: string;
-	role: "user" | "assistant" | "system";
+	role: "user" | "assistant" | "system" | "tool";
 	content: string;
 };
 
 type ChatAppProps = {
-	createSession: (approveToolCall: ToolApprover) => Promise<AgentSession>;
+	createSession: (
+		approveToolCall: ToolApprover,
+		onToolEvent: ToolEventHandler,
+	) => Promise<AgentSession>;
 };
 
 type ApprovalState = {
@@ -41,7 +46,24 @@ function ChatApp({ createSession }: ChatAppProps) {
 	const [messages, setMessages] = useState<UiMessage[]>([]);
 	const [isThinking, setIsThinking] = useState(false);
 	const [approval, setApproval] = useState<ApprovalState | null>(null);
+	const [currentTool, setCurrentTool] = useState<{
+		toolName: string;
+		preview: string;
+	} | null>(null);
 	const nextMessageId = useRef(0);
+
+	const createMessage = useCallback(
+		(role: UiMessage["role"], content: string): UiMessage => {
+			nextMessageId.current += 1;
+
+			return {
+				id: String(nextMessageId.current),
+				role,
+				content,
+			};
+		},
+		[],
+	);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -55,7 +77,38 @@ function ChatApp({ createSession }: ChatAppProps) {
 				setApproval({ request, resolve });
 			});
 
-		void createSession(approveToolCall)
+		const onToolEvent: ToolEventHandler = (event) => {
+			if (cancelled) {
+				return;
+			}
+
+			if (event.type === "tool.started") {
+				logger.info("tool.ui.started", {
+					toolName: event.toolName,
+					toolCallId: event.toolCallId,
+					preview: event.preview,
+				});
+				setCurrentTool({
+					toolName: event.toolName,
+					preview: event.preview,
+				});
+				return;
+			}
+
+			logger.info("tool.ui.completed", {
+				toolName: event.toolName,
+				toolCallId: event.toolCallId,
+				ok: event.ok,
+				durationMs: event.durationMs,
+			});
+			setCurrentTool(null);
+			setMessages((items) => [
+				...items,
+				createMessage("tool", formatCompletedToolMessage(event)),
+			]);
+		};
+
+		void createSession(approveToolCall, onToolEvent)
 			.then((createdSession) => {
 				if (!cancelled) {
 					logger.info("ui.session.created");
@@ -76,17 +129,7 @@ function ChatApp({ createSession }: ChatAppProps) {
 		return () => {
 			cancelled = true;
 		};
-	}, [createSession]);
-
-	function createMessage(role: UiMessage["role"], content: string): UiMessage {
-		nextMessageId.current += 1;
-
-		return {
-			id: String(nextMessageId.current),
-			role,
-			content,
-		};
-	}
+	}, [createSession, createMessage]);
 
 	async function submit(rawInput: string): Promise<void> {
 		const text = rawInput.trim();
@@ -238,7 +281,13 @@ function ChatApp({ createSession }: ChatAppProps) {
 									!{" "}
 								</Text>
 							) : null}
-							<Text dimColor={message.role === "user"}>{message.content}</Text>
+							{message.role === "tool" ? (
+								<Text dimColor>┊ {message.content}</Text>
+							) : (
+								<Text dimColor={message.role === "user"}>
+									{message.content}
+								</Text>
+							)}
 						</Text>
 					))
 				)}
@@ -274,7 +323,11 @@ function ChatApp({ createSession }: ChatAppProps) {
 					<Text color="green" bold>
 						●
 					</Text>{" "}
-					<Text dimColor>Thinking...</Text>
+					<Text dimColor>
+						{currentTool === null
+							? "Thinking..."
+							: `${currentTool.toolName} ${currentTool.preview}`}
+					</Text>
 				</Text>
 			) : null}
 
@@ -297,6 +350,7 @@ export class ChatLoop {
 	constructor(
 		private readonly createSession: (
 			approveToolCall: ToolApprover,
+			onToolEvent: ToolEventHandler,
 		) => Promise<AgentSession>,
 	) {}
 

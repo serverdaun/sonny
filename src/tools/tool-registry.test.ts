@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { createDefaultToolRegistry } from "./create-tool-registry";
 import type { Tool } from "./tool";
 import { ToolRegistry } from "./tool-registry";
 
@@ -31,22 +32,22 @@ describe("ToolRegistry", () => {
 	});
 
 	test("rejects duplicate tool names", () => {
-		registry.register(createTestTool("read_file"));
+		registry.register(createTestTool("readFile"));
 
-		expect(() => registry.register(createTestTool("read_file"))).toThrow(
-			"Tool already registered: read_file",
+		expect(() => registry.register(createTestTool("readFile"))).toThrow(
+			"Tool already registered: readFile",
 		);
 	});
 
 	test("returns OpenAI-compatible tool schemas", () => {
-		const tool = createTestTool("read_file");
+		const tool = createTestTool("readFile");
 		registry.register(tool);
 
 		expect(registry.getSchemas()).toEqual([
 			{
 				type: "function",
 				function: {
-					name: "read_file",
+					name: "readFile",
 					description: "A test tool",
 					parameters: {
 						type: "object",
@@ -54,6 +55,19 @@ describe("ToolRegistry", () => {
 					},
 				},
 			},
+		]);
+	});
+});
+
+describe("createDefaultToolRegistry", () => {
+	test("registers built-in tools", () => {
+		const registry = createDefaultToolRegistry();
+
+		expect(registry.list().map((tool) => tool.name)).toEqual([
+			"readFile",
+			"writeFile",
+			"editFile",
+			"bash",
 		]);
 	});
 });

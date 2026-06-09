@@ -24,7 +24,7 @@ function parseReadFileParameters(
 }
 
 export const readFileTool: Tool = {
-	name: "read_file",
+	name: "readFile",
 	description: "Read the content of a text file",
 	parameters: {
 		type: "object",

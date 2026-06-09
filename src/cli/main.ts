@@ -24,8 +24,8 @@ program
 	.action(async () => {
 		logger.info("chat.command.started");
 
-		const chatLoop = new ChatLoop((approveToolCall) =>
-			createAgentSession(config, approveToolCall),
+		const chatLoop = new ChatLoop((approveToolCall, onToolEvent) =>
+			createAgentSession(config, approveToolCall, onToolEvent),
 		);
 
 		await chatLoop.run();

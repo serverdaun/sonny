@@ -148,3 +148,37 @@ export function checkFileReadAccess(path: string): FileAccessDecision {
 
 	return allowed(resolvedPath);
 }
+
+export function checkFileWriteAccess(path: string): FileAccessDecision {
+	const resolvedPath = resolveInputPath(path);
+
+	if (isBlockedEnvFile(resolvedPath)) {
+		return denied(
+			resolvedPath,
+			"Access denied: refusing to write environment files",
+		);
+	}
+
+	if (isBlockedExactPath(resolvedPath)) {
+		return denied(
+			resolvedPath,
+			"Access denied: refusing to write sensitive files",
+		);
+	}
+
+	if (isBlockedCredentialDirectory(resolvedPath)) {
+		return denied(
+			resolvedPath,
+			"Access denied: refusing to write credential directories",
+		);
+	}
+
+	if (isBlockedDevicePath(resolvedPath)) {
+		return denied(
+			resolvedPath,
+			"Access denied: refusing to write device paths",
+		);
+	}
+
+	return allowed(resolvedPath);
+}
