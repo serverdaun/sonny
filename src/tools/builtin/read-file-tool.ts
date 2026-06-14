@@ -1,5 +1,4 @@
 import { stat } from "node:fs/promises";
-import { checkFileReadAccess } from "../policies/file-access-policy";
 import type { Tool } from "../tool";
 
 type ReadFileParameters = {
@@ -47,16 +46,7 @@ export const readFileTool: Tool = {
 			};
 		}
 
-		const decision = checkFileReadAccess(parsed.path);
-
-		if (!decision.allowed) {
-			return {
-				ok: false,
-				error: decision.reason,
-			};
-		}
-
-		const filePath = decision.path;
+		const filePath = parsed.path;
 
 		let fileStat: Awaited<ReturnType<typeof stat>>;
 

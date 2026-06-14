@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { editFileTool } from "./edit-file-tool";
@@ -25,10 +25,8 @@ describe("editFileTool", () => {
 		expect(await readFile(path, "utf8")).toBe("hello new world");
 
 		if (result.ok) {
-			const resolvedPath = await realpath(path);
-
 			expect(JSON.parse(result.content)).toEqual({
-				path: resolvedPath,
+				path,
 				replacements: 1,
 			});
 		}
@@ -107,19 +105,6 @@ describe("editFileTool", () => {
 
 		expect(result.ok).toBe(true);
 		expect(await readFile(path, "utf8")).toBe("hello world");
-	});
-
-	test("returns error when file policy denies access", async () => {
-		const result = await editFileTool.execute({
-			path: ".env",
-			oldText: "old",
-			newText: "new",
-		});
-
-		expect(result).toEqual({
-			ok: false,
-			error: "Access denied: refusing to write environment files",
-		});
 	});
 
 	test("returns error for missing file", async () => {

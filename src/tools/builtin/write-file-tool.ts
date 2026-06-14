@@ -1,6 +1,5 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { checkFileWriteAccess } from "../policies/file-access-policy";
 import type { Tool } from "../tool";
 
 type WriteFileParameters = {
@@ -58,16 +57,7 @@ export const writeFileTool: Tool = {
 			};
 		}
 
-		const decision = checkFileWriteAccess(parsed.path);
-
-		if (!decision.allowed) {
-			return {
-				ok: false,
-				error: decision.reason,
-			};
-		}
-
-		const filePath = decision.path;
+		const filePath = parsed.path;
 
 		try {
 			const fileStat = await stat(filePath);

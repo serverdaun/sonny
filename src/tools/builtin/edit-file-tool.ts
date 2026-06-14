@@ -1,5 +1,4 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
-import { checkFileWriteAccess } from "../policies/file-access-policy";
 import type { Tool } from "../tool";
 
 type EditFileParameters = {
@@ -108,16 +107,7 @@ export const editFileTool: Tool = {
 			};
 		}
 
-		const decision = checkFileWriteAccess(parsed.path);
-
-		if (!decision.allowed) {
-			return {
-				ok: false,
-				error: decision.reason,
-			};
-		}
-
-		const filePath = decision.path;
+		const filePath = parsed.path;
 
 		try {
 			const fileStat = await stat(filePath);

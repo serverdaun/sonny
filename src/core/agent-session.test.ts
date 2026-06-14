@@ -92,9 +92,10 @@ describe("AgentSession", () => {
 		const tools = new ToolRegistry();
 		tools.register(testTool);
 
-		const toolExecutor = new ToolExecutor(tools, async () => ({
-			approved: true,
-		}));
+		const toolExecutor = new ToolExecutor(tools, {
+			preTool: [() => ({ action: "ask" })],
+			permission: async () => ({ approved: true }),
+		});
 		const llm = new FakeLLM([
 			{
 				content: "",
@@ -144,9 +145,10 @@ describe("AgentSession", () => {
 
 	test("adds failed tool results to the conversation", async () => {
 		const tools = new ToolRegistry();
-		const toolExecutor = new ToolExecutor(tools, async () => ({
-			approved: true,
-		}));
+		const toolExecutor = new ToolExecutor(tools, {
+			preTool: [() => ({ action: "ask" })],
+			permission: async () => ({ approved: true }),
+		});
 		const llm = new FakeLLM([
 			{
 				content: "",
@@ -180,10 +182,13 @@ describe("AgentSession", () => {
 		const tools = new ToolRegistry();
 		tools.register(writeFileTool);
 
-		const toolExecutor = new ToolExecutor(tools, async () => ({
-			approved: false,
-			reason: "User declined writeFile.",
-		}));
+		const toolExecutor = new ToolExecutor(tools, {
+			preTool: [() => ({ action: "ask" })],
+			permission: async () => ({
+				approved: false,
+				reason: "User declined writeFile.",
+			}),
+		});
 		const llm = new FakeLLM([
 			{
 				content: "",

@@ -1,11 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-	mkdir,
-	mkdtemp,
-	readFile,
-	realpath,
-	writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileTool } from "./write-file-tool";
@@ -72,18 +66,6 @@ describe("writeFileTool", () => {
 		});
 	});
 
-	test("returns error when file policy denies access", async () => {
-		const result = await writeFileTool.execute({
-			path: ".env",
-			content: "SECRET=value",
-		});
-
-		expect(result).toEqual({
-			ok: false,
-			error: "Access denied: refusing to write environment files",
-		});
-	});
-
 	test("returns error for directory target", async () => {
 		const dir = await createTempDir();
 		const path = join(dir, "folder");
@@ -94,11 +76,10 @@ describe("writeFileTool", () => {
 			path,
 			content: "content",
 		});
-		const resolvedPath = await realpath(path);
 
 		expect(result).toEqual({
 			ok: false,
-			error: `Path is a directory: ${resolvedPath}`,
+			error: `Path is a directory: ${path}`,
 		});
 	});
 });

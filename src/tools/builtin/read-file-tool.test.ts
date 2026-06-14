@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFileTool } from "./read-file-tool";
@@ -42,20 +42,10 @@ describe("readFileTool", () => {
 		await mkdir(path);
 
 		const result = await readFileTool.execute({ path });
-		const resolvedPath = await realpath(path);
 
 		expect(result).toEqual({
 			ok: false,
-			error: `Path is a directory: ${resolvedPath}`,
-		});
-	});
-
-	test("returns error when file policy denies access", async () => {
-		const result = await readFileTool.execute({ path: ".env" });
-
-		expect(result).toEqual({
-			ok: false,
-			error: "Access denied: refusing to read environment files",
+			error: `Path is a directory: ${path}`,
 		});
 	});
 

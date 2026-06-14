@@ -1,71 +1,72 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import type { ToolHooks } from "./hooks/tool-hooks";
 import type { Tool } from "./tool";
-import {
-	type ToolApprover,
-	type ToolEvent,
-	ToolExecutor,
-} from "./tool-executor";
+import { type ToolEvent, ToolExecutor } from "./tool-executor";
 import { ToolRegistry } from "./tool-registry";
 
-const createTestTool = (name = "test_tool"): Tool => ({
+const createTestTool = (
+	name = "test_tool",
+	execute: Tool["execute"] = async () => ({ ok: true, content: "done" }),
+): Tool => ({
 	name,
 	description: "A test tool",
 	parameters: {
 		type: "object",
 		properties: {},
 	},
-	execute: async () => ({ ok: true, content: "done" }),
+	execute,
 });
 
-const createThrowingTool = (name = "throwing_tool"): Tool => ({
-	name,
-	description: "A tool that throws",
-	parameters: {
-		type: "object",
-		properties: {},
-	},
-	execute: async () => {
+const createThrowingTool = (name = "throwing_tool"): Tool =>
+	createTestTool(name, async () => {
 		throw new Error("Something bad happened");
-	},
-});
+	});
 
-const createFailingTool = (name = "failing_tool"): Tool => ({
-	name,
-	description: "A tool that returns an error",
-	parameters: {
-		type: "object",
-		properties: {},
-	},
-	execute: async () => ({ ok: false, error: "tool failed" }),
-});
+const createFailingTool = (name = "failing_tool"): Tool =>
+	createTestTool(name, async () => ({ ok: false, error: "tool failed" }));
 
 describe("ToolExecutor", () => {
-	let executor: ToolExecutor;
-	let rejectedExecutor: ToolExecutor;
 	let registry: ToolRegistry;
 	let tool: Tool;
 	let throwingTool: Tool;
-	let approver: ToolApprover;
-	let falseApprover: ToolApprover;
+	let allowHooks: ToolHooks;
+	let askHooks: ToolHooks;
+	let denyPermissionHooks: ToolHooks;
 
 	beforeEach(() => {
 		registry = new ToolRegistry();
 		tool = createTestTool();
 		throwingTool = createThrowingTool();
-		approver = async () => ({ approved: true });
-		falseApprover = async () => ({
-			approved: false,
-			reason: "Command can not be executed in this directory",
-		});
 
 		registry.register(tool);
 		registry.register(throwingTool);
 
-		executor = new ToolExecutor(registry, approver);
-		rejectedExecutor = new ToolExecutor(registry, falseApprover);
+		allowHooks = {
+			preTool: [() => ({ action: "allow" })],
+		};
+		askHooks = {
+			preTool: [() => ({ action: "ask" })],
+			permission: async () => ({ approved: true }),
+		};
+		denyPermissionHooks = {
+			preTool: [() => ({ action: "ask" })],
+			permission: async () => ({
+				approved: false,
+				reason: "Command can not be executed in this directory",
+			}),
+		};
 	});
 
-	test("executes an approved tool call", async () => {
+	test("preTool allow executes without permission", async () => {
+		let permissionCalled = false;
+		const executor = new ToolExecutor(registry, {
+			preTool: [() => ({ action: "allow" })],
+			permission: async () => {
+				permissionCalled = true;
+				return { approved: true };
+			},
+		});
+
 		const result = await executor.execute({
 			id: "call_test",
 			name: "test_tool",
@@ -76,10 +77,74 @@ describe("ToolExecutor", () => {
 			ok: true,
 			content: "done",
 		});
+		expect(permissionCalled).toBe(false);
 	});
 
-	test("rejects denied approval", async () => {
-		const result = await rejectedExecutor.execute({
+	test("preTool ask calls permission hook", async () => {
+		const permissionRequests: unknown[] = [];
+		const executor = new ToolExecutor(registry, {
+			preTool: [() => ({ action: "ask", reason: "needs user approval" })],
+			permission: async (request) => {
+				permissionRequests.push(request);
+				return { approved: true };
+			},
+		});
+
+		const result = await executor.execute({
+			id: "call_test",
+			name: "test_tool",
+			parameters: {},
+		});
+
+		expect(result.ok).toBe(true);
+		expect(permissionRequests).toHaveLength(1);
+		expect(permissionRequests[0]).toMatchObject({
+			toolCallId: "call_test",
+			toolName: "test_tool",
+			reason: "needs user approval",
+		});
+	});
+
+	test("preTool deny skips execution and returns BLOCKED", async () => {
+		let executed = false;
+		registry = new ToolRegistry();
+		registry.register(
+			createTestTool("test_tool", async () => {
+				executed = true;
+				return { ok: true, content: "done" };
+			}),
+		);
+		const executor = new ToolExecutor(registry, {
+			preTool: [() => ({ action: "deny", reason: "outside policy" })],
+		});
+
+		const result = await executor.execute({
+			id: "call_test",
+			name: "test_tool",
+			parameters: {},
+		});
+
+		expect(executed).toBe(false);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.reason).toBe("denied");
+			expect(result.error).toContain("BLOCKED");
+			expect(result.error).toContain("Blocked by policy: outside policy");
+		}
+	});
+
+	test("permission deny runs denied hook and returns BLOCKED", async () => {
+		const denied: unknown[] = [];
+		const executor = new ToolExecutor(registry, {
+			...denyPermissionHooks,
+			permissionDenied: [
+				(context) => {
+					denied.push(context);
+				},
+			],
+		});
+
+		const result = await executor.execute({
 			id: "call_test",
 			name: "test_tool",
 			parameters: {},
@@ -90,16 +155,28 @@ describe("ToolExecutor", () => {
 			expect(result.reason).toBe("denied");
 			expect(result.error).toContain("BLOCKED");
 			expect(result.error).toContain("User denied this tool call");
-			expect(result.error).toContain("Do NOT retry");
-			expect(result.error).toContain("do NOT rephrase");
-			expect(result.error).toContain("different tool");
 			expect(result.error).toContain(
-				"Reason: Command can not be executed in this directory",
+				"Command can not be executed in this directory",
 			);
 		}
+		expect(denied).toHaveLength(1);
+		expect(denied[0]).toMatchObject({
+			toolCallId: "call_test",
+			toolName: "test_tool",
+		});
 	});
 
-	test("returns error for unknown tool", async () => {
+	test("returns error for unknown tool before hooks run", async () => {
+		let hookCalled = false;
+		const executor = new ToolExecutor(registry, {
+			preTool: [
+				() => {
+					hookCalled = true;
+					return { action: "allow" };
+				},
+			],
+		});
+
 		const result = await executor.execute({
 			id: "call_test",
 			name: "unknown_tool",
@@ -111,9 +188,12 @@ describe("ToolExecutor", () => {
 			error: "Tool not found: unknown_tool",
 			reason: "not_found",
 		});
+		expect(hookCalled).toBe(false);
 	});
 
-	test("returns error when tool throws", async () => {
+	test("returns transformed error when tool throws", async () => {
+		const executor = new ToolExecutor(registry, allowHooks);
+
 		const result = await executor.execute({
 			id: "call_test",
 			name: "throwing_tool",
@@ -127,17 +207,94 @@ describe("ToolExecutor", () => {
 		});
 	});
 
-	test("emits started and completed events for approved successful tools", async () => {
-		const events: ToolEvent[] = [];
-		const executor = new ToolExecutor(registry, approver, (event) => {
-			events.push(event);
+	test("preTool updateInput executes with updated parameters", async () => {
+		let executedWith: unknown;
+		registry = new ToolRegistry();
+		registry.register(
+			createTestTool("test_tool", async (parameters) => {
+				executedWith = parameters;
+				return { ok: true, content: "done" };
+			}),
+		);
+		const executor = new ToolExecutor(registry, {
+			preTool: [
+				() => ({
+					action: "updateInput",
+					parameters: { path: "updated.txt" },
+					reason: "normalize path",
+				}),
+			],
 		});
 
 		await executor.execute({
 			id: "call_test",
 			name: "test_tool",
+			parameters: { path: "original.txt" },
+		});
+
+		expect(executedWith).toEqual({ path: "updated.txt" });
+	});
+
+	test("multiple pre hooks run in order with updated parameters", async () => {
+		const seen: unknown[] = [];
+		let executedWith: unknown;
+		registry = new ToolRegistry();
+		registry.register(
+			createTestTool("test_tool", async (parameters) => {
+				executedWith = parameters;
+				return { ok: true, content: "done" };
+			}),
+		);
+		const executor = new ToolExecutor(registry, {
+			preTool: [
+				(context) => {
+					seen.push(context.parameters);
+					return {
+						action: "updateInput",
+						parameters: { path: "updated.txt" },
+					};
+				},
+				(context) => {
+					seen.push(context.parameters);
+					return { action: "allow" };
+				},
+			],
+		});
+
+		await executor.execute({
+			id: "call_test",
+			name: "test_tool",
+			parameters: { path: "original.txt" },
+		});
+
+		expect(seen).toEqual([{ path: "original.txt" }, { path: "updated.txt" }]);
+		expect(executedWith).toEqual({ path: "updated.txt" });
+	});
+
+	test("emits started and completed events with final parameters", async () => {
+		const events: ToolEvent[] = [];
+		const executor = new ToolExecutor(
+			registry,
+			{
+				preTool: [
+					() => ({
+						action: "updateInput",
+						parameters: { path: "notes.txt" },
+					}),
+					() => ({ action: "ask" }),
+				],
+				permission: async () => ({ approved: true }),
+			},
+			(event) => {
+				events.push(event);
+			},
+		);
+
+		await executor.execute({
+			id: "call_test",
+			name: "test_tool",
 			parameters: {
-				path: "notes.txt",
+				path: "original.txt",
 			},
 		});
 
@@ -163,35 +320,15 @@ describe("ToolExecutor", () => {
 		});
 	});
 
-	test("emits completed event for failed tool results", async () => {
+	test("emits completed event for denied tools", async () => {
 		const events: ToolEvent[] = [];
-		const failingTool = createFailingTool();
-		registry.register(failingTool);
-		const executor = new ToolExecutor(registry, approver, (event) => {
-			events.push(event);
-		});
-
-		await executor.execute({
-			id: "call_fail",
-			name: "failing_tool",
-			parameters: {},
-		});
-
-		expect(events).toHaveLength(2);
-		expect(events[1]).toMatchObject({
-			type: "tool.completed",
-			toolCallId: "call_fail",
-			toolName: "failing_tool",
-			ok: false,
-			content: "tool failed",
-		});
-	});
-
-	test("emits denied completed event", async () => {
-		const events: ToolEvent[] = [];
-		const executor = new ToolExecutor(registry, falseApprover, (event) => {
-			events.push(event);
-		});
+		const executor = new ToolExecutor(
+			registry,
+			denyPermissionHooks,
+			(event) => {
+				events.push(event);
+			},
+		);
 
 		await executor.execute({
 			id: "call_denied",
@@ -209,5 +346,142 @@ describe("ToolExecutor", () => {
 		expect(
 			events[0]?.type === "tool.completed" ? events[0].content : "",
 		).toContain("BLOCKED");
+	});
+
+	test("postTool receives raw result before transform", async () => {
+		const observed: unknown[] = [];
+		const executor = new ToolExecutor(registry, {
+			preTool: [() => ({ action: "allow" })],
+			postTool: [
+				(context) => {
+					observed.push(context.result);
+				},
+			],
+			transformToolResult: [
+				() => ({
+					ok: true,
+					content: "transformed",
+				}),
+			],
+		});
+
+		const result = await executor.execute({
+			id: "call_test",
+			name: "test_tool",
+			parameters: {},
+		});
+
+		expect(observed).toEqual([{ ok: true, content: "done" }]);
+		expect(result).toEqual({ ok: true, content: "transformed" });
+	});
+
+	test("failed tool runs failure hook", async () => {
+		const failures: unknown[] = [];
+		registry.register(createFailingTool());
+		const executor = new ToolExecutor(registry, {
+			preTool: [() => ({ action: "allow" })],
+			toolFailure: [
+				(context) => {
+					failures.push(context.result);
+				},
+			],
+		});
+
+		await executor.execute({
+			id: "call_fail",
+			name: "failing_tool",
+			parameters: {},
+		});
+
+		expect(failures).toEqual([{ ok: false, error: "tool failed" }]);
+	});
+
+	test("transformToolResult can enrich failure for the model", async () => {
+		registry.register(createFailingTool());
+		const executor = new ToolExecutor(registry, {
+			preTool: [() => ({ action: "allow" })],
+			transformToolResult: [
+				({ result }) =>
+					result.ok
+						? result
+						: {
+								...result,
+								error: `${result.error}\n\nRecovery guidance.`,
+							},
+			],
+		});
+
+		const result = await executor.execute({
+			id: "call_fail",
+			name: "failing_tool",
+			parameters: {},
+		});
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).toContain("tool failed");
+			expect(result.error).toContain("Recovery guidance.");
+		}
+	});
+
+	test("tool.completed uses transformed result", async () => {
+		const events: ToolEvent[] = [];
+		const executor = new ToolExecutor(
+			registry,
+			{
+				preTool: [() => ({ action: "allow" })],
+				transformToolResult: [
+					() => ({
+						ok: true,
+						content: "transformed",
+					}),
+				],
+			},
+			(event) => {
+				events.push(event);
+			},
+		);
+
+		const result = await executor.execute({
+			id: "call_test",
+			name: "test_tool",
+			parameters: {},
+		});
+
+		expect(result).toEqual({ ok: true, content: "transformed" });
+		expect(events[1]).toMatchObject({
+			type: "tool.completed",
+			content: "transformed",
+		});
+	});
+
+	test("preTool ask without permission hook denies safely", async () => {
+		const executor = new ToolExecutor(registry, {
+			preTool: [() => ({ action: "ask" })],
+		});
+
+		const result = await executor.execute({
+			id: "call_test",
+			name: "test_tool",
+			parameters: {},
+		});
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.reason).toBe("denied");
+			expect(result.error).toContain("no permission hook was configured");
+		}
+	});
+
+	test("preTool ask executes after permission approval", async () => {
+		const executor = new ToolExecutor(registry, askHooks);
+
+		const result = await executor.execute({
+			id: "call_test",
+			name: "test_tool",
+			parameters: {},
+		});
+
+		expect(result).toEqual({ ok: true, content: "done" });
 	});
 });

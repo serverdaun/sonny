@@ -3,6 +3,7 @@ import { loadAgentDefinition } from "../agents/agents-loader";
 import type { Config } from "../config";
 import { LLMProvider } from "../providers/llm-provider";
 import { createDefaultToolRegistry } from "../tools/create-tool-registry";
+import { createDefaultToolHooks } from "../tools/hooks/default-tool-hooks";
 import {
 	type ToolApprover,
 	type ToolEventHandler,
@@ -22,7 +23,8 @@ export async function createAgentSession(
 	const state = new SessionState(agent);
 	const llm = new LLMProvider(config.llm);
 	const tools = createDefaultToolRegistry();
-	const toolExecutor = new ToolExecutor(tools, approveToolCall, onToolEvent);
+	const hooks = createDefaultToolHooks(approveToolCall);
+	const toolExecutor = new ToolExecutor(tools, hooks, onToolEvent);
 
 	return new AgentSession(state, llm, tools, toolExecutor);
 }
