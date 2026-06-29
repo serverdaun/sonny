@@ -1,7 +1,15 @@
 import type { ChatMessage } from "./message";
 
+export type SessionStateOptions = {
+	initialMessages?: ChatMessage[];
+};
+
 export class SessionState {
-	private readonly messages: ChatMessage[] = [];
+	private readonly messages: ChatMessage[];
+
+	constructor(options: SessionStateOptions = {}) {
+		this.messages = [...(options.initialMessages ?? [])];
+	}
 
 	addMessage(message: ChatMessage): void {
 		this.messages.push(message);

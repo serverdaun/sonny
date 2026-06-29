@@ -42,4 +42,30 @@ describe("SessionState", () => {
 
 		expect(state.getMessages()).toEqual([{ role: "user", content: "Hello" }]);
 	});
+
+	test("starts with initial messages", () => {
+		state = new SessionState({
+			initialMessages: [
+				{ role: "user", content: "Previous question" },
+				{ role: "assistant", content: "Previous answer" },
+			],
+		});
+
+		expect(state.getMessages()).toEqual([
+			{ role: "user", content: "Previous question" },
+			{ role: "assistant", content: "Previous answer" },
+		]);
+		expect(state.messageCount).toBe(2);
+	});
+
+	test("builds messages with system prompt before initial messages", () => {
+		state = new SessionState({
+			initialMessages: [{ role: "user", content: "Previous question" }],
+		});
+
+		expect(state.buildMessages("You are Sonny")).toEqual([
+			{ role: "system", content: "You are Sonny" },
+			{ role: "user", content: "Previous question" },
+		]);
+	});
 });

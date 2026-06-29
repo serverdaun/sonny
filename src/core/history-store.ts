@@ -128,6 +128,14 @@ export class HistoryStore {
 		);
 	}
 
+	getSession(sessionId: string): HistorySession | undefined {
+		return this.readSessions().find((session) => session.id === sessionId);
+	}
+
+	getLatestSession(): HistorySession | undefined {
+		return this.listSessions().find((session) => session.messageCount > 0);
+	}
+
 	readMessages(sessionId: string): ChatMessage[] {
 		const sessionPath = this.getSessionPath(sessionId);
 		if (!existsSync(sessionPath)) {

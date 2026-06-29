@@ -12,27 +12,38 @@ import { type ToolEventHandler, ToolExecutor } from "../tools/tool-executor";
 import { createLogger } from "../utils/logger";
 import { AgentSession } from "./agent-session";
 import { HistoryRecorder } from "./history-recorder";
-import { HistoryStore } from "./history-store";
+import { type HistorySession, HistoryStore } from "./history-store";
+import type { ChatMessage } from "./message";
 import { SessionState } from "./session-state";
 import { buildSystemPrompt } from "./system-prompt-builder";
+
+export type CreateAgentSessionMode = "new" | "resume" | "continue";
+
+export type CreateAgentSessionResult = {
+	session: AgentSession;
+	historySession: HistorySession;
+	restoredMessageCount: number;
+	restoredMessages: ChatMessage[];
+	mode: CreateAgentSessionMode;
+};
 
 export type CreateAgentSessionOptions = {
 	config: Config;
 	approveToolCall: PermissionHook;
 	onToolEvent?: ToolEventHandler;
 	skillsDirectory?: string;
+	resumeSessionId?: string;
+	continueLatest?: boolean;
 };
 
 const logger = createLogger("core.create-agent-session");
 
 export async function createAgentSession(
 	options: CreateAgentSessionOptions,
-): Promise<AgentSession> {
-	const agentsPath = join(options.config.workspace, options.config.agentsPath);
-	const agentDefinition = await loadAgentDefinition(
-		agentsPath,
-		options.config.defaultAgent,
-	);
+): Promise<CreateAgentSessionResult> {
+	if (options.resumeSessionId && options.continueLatest) {
+		throw new Error("Use either resumeSessionId or continueLatest, not both.");
+	}
 
 	const skillsResult = options.skillsDirectory
 		? await loadSkills(options.skillsDirectory)
@@ -42,24 +53,60 @@ export async function createAgentSession(
 		logger.warn("skill.load.failed", { error });
 	}
 
-	const systemPrompt = buildSystemPrompt({
-		stable: [
-			agentDefinition.instructions,
-			buildSkillsPrompt(skillsResult.skills),
-		],
-	});
-
 	const historyStore = new HistoryStore(
 		join(options.config.workspace, ".history"),
 	);
-	const historySession = historyStore.createSession({
-		id: randomUUID(),
-		agentId: options.config.defaultAgent,
-		systemPrompt,
-	});
-	const historyRecorder = new HistoryRecorder(historyStore, historySession.id);
+	let mode: CreateAgentSessionMode = "new";
+	let historySession: HistorySession;
+	let restoredMessages: ChatMessage[] = [];
 
-	const state = new SessionState();
+	if (options.resumeSessionId) {
+		mode = "resume";
+		const existingSession = historyStore.getSession(options.resumeSessionId);
+		if (existingSession === undefined) {
+			throw new Error(`Session not found: ${options.resumeSessionId}`);
+		}
+		historySession = existingSession;
+		restoredMessages = historyStore.readMessages(historySession.id);
+	} else if (options.continueLatest) {
+		mode = "continue";
+		const latestSession = historyStore.getLatestSession();
+		if (latestSession === undefined) {
+			throw new Error("No previous session found to continue");
+		}
+		historySession = latestSession;
+		restoredMessages = historyStore.readMessages(historySession.id);
+	} else {
+		const agentsPath = join(
+			options.config.workspace,
+			options.config.agentsPath,
+		);
+		const agentDefinition = await loadAgentDefinition(
+			agentsPath,
+			options.config.defaultAgent,
+		);
+		const systemPrompt = buildSystemPrompt({
+			stable: [
+				agentDefinition.instructions,
+				buildSkillsPrompt(skillsResult.skills),
+			],
+		});
+		historySession = historyStore.createSession({
+			id: randomUUID(),
+			agentId: options.config.defaultAgent,
+			systemPrompt,
+		});
+	}
+
+	const systemPrompt = historySession.systemPrompt;
+	const restoredMessageCount = restoredMessages.length;
+	const historyRecorder = new HistoryRecorder(historyStore, historySession.id, {
+		flushedMessageCount: restoredMessageCount,
+	});
+
+	const state = new SessionState({
+		initialMessages: restoredMessages,
+	});
 	const llm = new LLMProvider(options.config.llm);
 	const tools = createDefaultToolRegistry({
 		skills: skillsResult.skills,
@@ -67,12 +114,18 @@ export async function createAgentSession(
 	const hooks = createDefaultToolHooks(options.approveToolCall);
 	const toolExecutor = new ToolExecutor(tools, hooks, options.onToolEvent);
 
-	return new AgentSession(
-		systemPrompt,
-		state,
-		llm,
-		tools,
-		toolExecutor,
-		historyRecorder,
-	);
+	return {
+		session: new AgentSession(
+			systemPrompt,
+			state,
+			llm,
+			tools,
+			toolExecutor,
+			historyRecorder,
+		),
+		historySession,
+		restoredMessageCount,
+		restoredMessages,
+		mode,
+	};
 }

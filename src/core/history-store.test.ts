@@ -205,4 +205,71 @@ describe("history-store", () => {
 
 		expect(store.readMessages("missing-session")).toEqual([]);
 	});
+
+	test("gets session metadata by id", async () => {
+		const historyDir = await createTempHistoryDir();
+		const store = new HistoryStore(historyDir);
+		store.createSession({
+			id: _SESSION_ID,
+			agentId: _AGENT_ID,
+			systemPrompt: _SYSTEM_PROMPT,
+		});
+
+		expect(store.getSession(_SESSION_ID)).toMatchObject({
+			id: _SESSION_ID,
+			agentId: _AGENT_ID,
+			systemPrompt: _SYSTEM_PROMPT,
+		});
+	});
+
+	test("returns undefined when session metadata is missing", async () => {
+		const historyDir = await createTempHistoryDir();
+		const store = new HistoryStore(historyDir);
+
+		expect(store.getSession("missing-session")).toBeUndefined();
+	});
+
+	test("gets latest non-empty session", async () => {
+		const historyDir = await createTempHistoryDir();
+		const store = new HistoryStore(historyDir);
+		store.createSession({
+			id: "empty-session",
+			agentId: _AGENT_ID,
+			systemPrompt: _SYSTEM_PROMPT,
+		});
+		store.createSession({
+			id: "older-session",
+			agentId: _AGENT_ID,
+			systemPrompt: _SYSTEM_PROMPT,
+		});
+		store.createSession({
+			id: "newer-session",
+			agentId: _AGENT_ID,
+			systemPrompt: _SYSTEM_PROMPT,
+		});
+
+		store.appendMessage("older-session", {
+			role: "user",
+			content: "older",
+		});
+		await new Promise((resolve) => setTimeout(resolve, 2));
+		store.appendMessage("newer-session", {
+			role: "user",
+			content: "newer",
+		});
+
+		expect(store.getLatestSession()?.id).toBe("newer-session");
+	});
+
+	test("returns undefined when latest session search only finds empty sessions", async () => {
+		const historyDir = await createTempHistoryDir();
+		const store = new HistoryStore(historyDir);
+		store.createSession({
+			id: "empty-session",
+			agentId: _AGENT_ID,
+			systemPrompt: _SYSTEM_PROMPT,
+		});
+
+		expect(store.getLatestSession()).toBeUndefined();
+	});
 });

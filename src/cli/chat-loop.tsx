@@ -1,6 +1,7 @@
 import { Box, render, Text, useApp, useInput } from "ink";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentSession } from "../core/agent-session";
+import type { CreateAgentSessionResult } from "../core/create-agent-session";
+import type { ChatMessage, ToolCall } from "../core/message";
 import type {
 	ToolApprovalDecision,
 	ToolApprovalRequest,
@@ -8,13 +9,17 @@ import type {
 	ToolEventHandler,
 } from "../tools/tool-executor";
 import { createLogger } from "../utils/logger";
-import { formatCompletedToolMessage } from "./tool-display";
+import {
+	formatCompletedToolMessage,
+	formatToolPreview,
+	formatToolResultPreview,
+} from "./tool-display";
 
 const logger = createLogger("cli.chat-loop");
 
 type UiMessage = {
 	id: string;
-	role: "user" | "assistant" | "system" | "tool";
+	role: "user" | "assistant" | "system" | "tool" | "error";
 	content: string;
 };
 
@@ -22,13 +27,15 @@ type ChatAppProps = {
 	createSession: (
 		approveToolCall: ToolApprover,
 		onToolEvent: ToolEventHandler,
-	) => Promise<AgentSession>;
+	) => Promise<CreateAgentSessionResult>;
 };
 
 type ApprovalState = {
 	request: ToolApprovalRequest;
 	resolve: (decision: ToolApprovalDecision) => void;
 };
+
+type RestoredUiMessage = Omit<UiMessage, "id">;
 
 function formatParameters(parameters: unknown): string {
 	try {
@@ -38,9 +45,113 @@ function formatParameters(parameters: unknown): string {
 	}
 }
 
+export function formatSessionStartupMessage(
+	session: CreateAgentSessionResult,
+): string | null {
+	if (session.mode === "new") {
+		return null;
+	}
+
+	const title =
+		session.historySession.title === "Untitled session"
+			? session.historySession.id
+			: session.historySession.title;
+
+	return `↻ Resumed ${title} (${session.restoredMessageCount} messages)`;
+}
+
+function looksLikeToolError(content: string): boolean {
+	return (
+		content.startsWith("BLOCKED:") ||
+		content.startsWith("ERROR:") ||
+		content.startsWith("Tool execution failed:")
+	);
+}
+
+function formatRestoredToolMessage(
+	toolCall: ToolCall | undefined,
+	content: string,
+): string {
+	if (toolCall === undefined) {
+		return "tool";
+	}
+
+	const ok = !looksLikeToolError(content);
+	const resultPreview = formatToolResultPreview(toolCall.name, content, ok);
+
+	return [
+		toolCall.name,
+		formatToolPreview(toolCall.name, toolCall.parameters),
+		resultPreview,
+	]
+		.filter(Boolean)
+		.join("  ");
+}
+
+export function createRestoredUiMessages(
+	messages: ChatMessage[],
+): RestoredUiMessage[] {
+	const toolCallsById = new Map<string, ToolCall>();
+	const restoredMessages: RestoredUiMessage[] = [];
+
+	for (const message of messages) {
+		if (message.role === "system") {
+			continue;
+		}
+
+		if (message.role === "user") {
+			restoredMessages.push({
+				role: "user",
+				content: message.content,
+			});
+			continue;
+		}
+
+		if (message.role === "assistant") {
+			for (const toolCall of message.toolCalls ?? []) {
+				toolCallsById.set(toolCall.id, toolCall);
+			}
+
+			if (message.content.trim().length === 0) {
+				continue;
+			}
+
+			restoredMessages.push({
+				role: "assistant",
+				content: message.content,
+			});
+			continue;
+		}
+
+		restoredMessages.push({
+			role: "tool",
+			content: formatRestoredToolMessage(
+				toolCallsById.get(message.toolCallId),
+				message.content,
+			),
+		});
+	}
+
+	return restoredMessages;
+}
+
+export function formatSessionExitSummary(
+	session: CreateAgentSessionResult | null,
+): string | null {
+	if (session === null) {
+		return null;
+	}
+
+	return [
+		"",
+		"Resume this session with:",
+		`  sonny chat --resume ${session.historySession.id}`,
+	].join("\n");
+}
+
 function ChatApp({ createSession }: ChatAppProps) {
 	const { exit } = useApp();
-	const [session, setSession] = useState<AgentSession | null>(null);
+	const [session, setSession] = useState<CreateAgentSessionResult | null>(null);
 	const [startupError, setStartupError] = useState<string | null>(null);
 	const [input, setInput] = useState("");
 	const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -113,6 +224,17 @@ function ChatApp({ createSession }: ChatAppProps) {
 				if (!cancelled) {
 					logger.info("ui.session.created");
 					setSession(createdSession);
+					const startupMessage = formatSessionStartupMessage(createdSession);
+
+					if (startupMessage !== null) {
+						setMessages((items) => [
+							...items,
+							createMessage("system", startupMessage),
+							...createRestoredUiMessages(createdSession.restoredMessages).map(
+								(message) => createMessage(message.role, message.content),
+							),
+						]);
+					}
 				}
 			})
 			.catch((error) => {
@@ -158,7 +280,7 @@ function ChatApp({ createSession }: ChatAppProps) {
 		});
 
 		try {
-			const response = await session.chat(text);
+			const response = await session.session.chat(text);
 			logger.info("ui.submit.completed", {
 				responseLength: response.length,
 			});
@@ -170,7 +292,7 @@ function ChatApp({ createSession }: ChatAppProps) {
 			setMessages((items) => [
 				...items,
 				createMessage(
-					"system",
+					"error",
 					error instanceof Error ? error.message : String(error),
 				),
 			]);
@@ -272,22 +394,30 @@ function ChatApp({ createSession }: ChatAppProps) {
 					messages.map((message) => (
 						<Text key={message.id}>
 							{message.role === "assistant" ? (
-								<Text color="green" bold>
-									●{" "}
-								</Text>
+								<>
+									<Text color="green" bold>
+										●{" "}
+									</Text>
+									{message.content}
+								</>
+							) : null}
+							{message.role === "user" ? (
+								<Text dimColor>{message.content}</Text>
 							) : null}
 							{message.role === "system" ? (
-								<Text color="red" bold>
-									!{" "}
-								</Text>
+								<Text dimColor>{message.content}</Text>
+							) : null}
+							{message.role === "error" ? (
+								<>
+									<Text color="red" bold>
+										!{" "}
+									</Text>
+									{message.content}
+								</>
 							) : null}
 							{message.role === "tool" ? (
 								<Text dimColor>┊ {message.content}</Text>
-							) : (
-								<Text dimColor={message.role === "user"}>
-									{message.content}
-								</Text>
-							)}
+							) : null}
 						</Text>
 					))
 				)}
@@ -351,11 +481,28 @@ export class ChatLoop {
 		private readonly createSession: (
 			approveToolCall: ToolApprover,
 			onToolEvent: ToolEventHandler,
-		) => Promise<AgentSession>,
+		) => Promise<CreateAgentSessionResult>,
 	) {}
 
 	async run(): Promise<void> {
-		const app = render(<ChatApp createSession={this.createSession} />);
+		let createdSession: CreateAgentSessionResult | null = null;
+		const app = render(
+			<ChatApp
+				createSession={async (approveToolCall, onToolEvent) => {
+					const session = await this.createSession(
+						approveToolCall,
+						onToolEvent,
+					);
+					createdSession = session;
+					return session;
+				}}
+			/>,
+		);
 		await app.waitUntilExit();
+
+		const exitSummary = formatSessionExitSummary(createdSession);
+		if (exitSummary !== null) {
+			console.log(exitSummary);
+		}
 	}
 }

@@ -7,13 +7,20 @@ export type HistoryRecorderSink = {
 	flush(messages: ChatMessage[]): void;
 };
 
+export type HistoryRecorderOptions = {
+	flushedMessageCount?: number;
+};
+
 export class HistoryRecorder implements HistoryRecorderSink {
-	private flushedMessageCount = 0;
+	private flushedMessageCount: number;
 
 	constructor(
 		private readonly historyStore: HistoryMessageAppender,
 		private readonly sessionId: string,
-	) {}
+		options: HistoryRecorderOptions = {},
+	) {
+		this.flushedMessageCount = options.flushedMessageCount ?? 0;
+	}
 
 	flush(messages: ChatMessage[]): void {
 		for (

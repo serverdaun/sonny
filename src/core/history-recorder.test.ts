@@ -74,4 +74,21 @@ describe("HistoryRecorder", () => {
 
 		expect(historyStore.appendedMessages).toEqual([]);
 	});
+
+	test("initial flushed message count skips restored messages", () => {
+		const historyStore = new FakeHistoryStore();
+		const recorder = new HistoryRecorder(historyStore, "session-id", {
+			flushedMessageCount: 2,
+		});
+
+		recorder.flush([
+			{ role: "user", content: "Restored question" },
+			{ role: "assistant", content: "Restored answer" },
+			{ role: "user", content: "New question" },
+		]);
+
+		expect(historyStore.appendedMessages).toEqual([
+			{ role: "user", content: "New question" },
+		]);
+	});
 });
