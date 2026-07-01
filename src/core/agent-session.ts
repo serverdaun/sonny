@@ -31,6 +31,10 @@ export class AgentSession {
 		private readonly historyRecorder?: HistoryRecorderSink,
 	) {}
 
+	getMessageCount(): number {
+		return this.state.messageCount;
+	}
+
 	async chat(message: string): Promise<string> {
 		logger.info("chat.started", {
 			messageLength: message.length,

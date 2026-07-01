@@ -5,6 +5,7 @@ import type { Config } from "../config";
 import { LLMProvider } from "../providers/llm-provider";
 import { buildSkillsPrompt } from "../skills/build-skills-prompt";
 import { loadSkills } from "../skills/load-skills";
+import type { Skill } from "../skills/skill";
 import { createDefaultToolRegistry } from "../tools/create-tool-registry";
 import { createDefaultToolHooks } from "../tools/hooks/default-tool-hooks";
 import type { PermissionHook } from "../tools/hooks/tool-hooks";
@@ -24,6 +25,7 @@ export type CreateAgentSessionResult = {
 	historySession: HistorySession;
 	restoredMessageCount: number;
 	restoredMessages: ChatMessage[];
+	skills: Skill[];
 	mode: CreateAgentSessionMode;
 };
 
@@ -126,6 +128,7 @@ export async function createAgentSession(
 		historySession,
 		restoredMessageCount,
 		restoredMessages,
+		skills: skillsResult.skills,
 		mode,
 	};
 }

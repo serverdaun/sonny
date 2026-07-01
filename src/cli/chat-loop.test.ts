@@ -30,6 +30,7 @@ function createSessionResult(
 		historySession: createHistorySession(),
 		restoredMessageCount: 2,
 		restoredMessages: [],
+		skills: [],
 		mode: "resume",
 		...overrides,
 	};

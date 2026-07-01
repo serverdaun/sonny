@@ -1,5 +1,7 @@
 import { Box, render, Text, useApp, useInput } from "ink";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { SlashCommandResult } from "../commands/command";
+import { createDefaultCommandRegistry } from "../commands/create-command-registry";
 import type { CreateAgentSessionResult } from "../core/create-agent-session";
 import type { ChatMessage, ToolCall } from "../core/message";
 import type {
@@ -151,6 +153,7 @@ export function formatSessionExitSummary(
 
 function ChatApp({ createSession }: ChatAppProps) {
 	const { exit } = useApp();
+	const commandRegistry = useMemo(() => createDefaultCommandRegistry(), []);
 	const [session, setSession] = useState<CreateAgentSessionResult | null>(null);
 	const [startupError, setStartupError] = useState<string | null>(null);
 	const [input, setInput] = useState("");
@@ -175,6 +178,42 @@ function ChatApp({ createSession }: ChatAppProps) {
 		},
 		[],
 	);
+
+	async function handleCommandResult(
+		result: SlashCommandResult,
+	): Promise<void> {
+		if (result.type === "message") {
+			setMessages((items) => [
+				...items,
+				createMessage("system", result.content),
+			]);
+			return;
+		}
+
+		if (result.type === "exit") {
+			if (result.content !== undefined && result.content.length > 0) {
+				setMessages((items) => [
+					...items,
+					createMessage("system", result.content ?? ""),
+				]);
+			}
+			exit();
+			return;
+		}
+
+		if (result.type === "submit") {
+			if (result.notice !== undefined && result.notice.length > 0) {
+				setMessages((items) => [
+					...items,
+					createMessage("system", result.notice ?? ""),
+				]);
+			}
+			await submit(result.content);
+			return;
+		}
+
+		await submit(result.input);
+	}
 
 	useEffect(() => {
 		let cancelled = false;
@@ -269,6 +308,18 @@ function ChatApp({ createSession }: ChatAppProps) {
 
 		if (["q", "quit", "exit"].includes(text.toLowerCase())) {
 			exit();
+			return;
+		}
+
+		const commandResult = await commandRegistry.dispatch(text, {
+			historySession: session.historySession,
+			skills: session.skills,
+			getMessageCount: () => session.session.getMessageCount(),
+		});
+
+		if (commandResult.handled) {
+			setInput("");
+			await handleCommandResult(commandResult.result);
 			return;
 		}
 
